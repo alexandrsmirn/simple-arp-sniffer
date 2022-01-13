@@ -4,6 +4,7 @@ import binascii
 import argparse
 import re
 
+
 def parse_oui():
     OUI = {}
     with open('oui.txt') as data:
@@ -16,45 +17,60 @@ def parse_oui():
 
     return OUI
 
-parser = argparse.ArgumentParser(description="A simple ARP sniffer")
-parser.add_argument("-i", dest='iface', default='wlp7s0')
-args = parser.parse_args()
 
-OUI = parse_oui()
-sniff_socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+def start_sniffing(sniff_socket, iface):
+    OUI = parse_oui()
+    while True:
+        try: 
+            raw_bytes, info = sniff_socket.recvfrom(65535)
+        except socket.error as err: 
+            print (f"Error receiving data: {err}") 
+            continue
+        
+        ether_type = info[1]
 
-while True:
-    raw_bytes, info = sniff_socket.recvfrom(65535)
-    ether_type = info[1]
+        if not info[0] == iface or not ether_type == 0x0806:
+            continue
 
-    #ethernet_data = struct.unpack("6s6s2s", raw_bytes[0:14])
-    #ether_type = int.from_bytes(ethernet_data[2], 'big')
+        print("Recieved ARP packet")
+        arp_data = struct.unpack("2s2s1s1s2s6s4s6s4s", raw_bytes[14:42])
 
-    if not info[0] == args.iface or not ether_type == 0x0806:
-        continue
+        opcode = int.from_bytes(arp_data[4], 'big')
+        if opcode == 1:
+            print("Packet type: request")
+        else:
+            print("Packet type: reply")
 
-    print("Recieved ARP packet")
-    arp_data = struct.unpack("2s2s1s1s2s6s4s6s4s", raw_bytes[14:42])
+        sender_addr = binascii.hexlify(arp_data[5]).decode('utf-8')
+        target_addr = binascii.hexlify(arp_data[7]).decode('utf-8')
 
-    opcode = int.from_bytes(arp_data[4], 'big')
-    if opcode == 1:
-        print("Packet type: request")
-    else:
-        print("Packet type: reply")
+        sender_vendor = OUI.get(sender_addr[:6], 'N/A: Unknown vendor')
+        if target_addr == '000000000000':
+            target_vendor = "N/A: MAC is unknown yet"
+        else:
+            target_vendor = OUI.get(target_addr[:6], 'N/A: Unknown vendor')
+        
+        print("Sender address (base 64):", sender_addr)
+        print("Sender vendor:", sender_vendor)
 
-    sender_addr = binascii.hexlify(arp_data[5]).decode('utf-8')
-    target_addr = binascii.hexlify(arp_data[7]).decode('utf-8')
+        print("Target address (base 64):", target_addr)
+        print("Target vendor:", target_vendor)
 
-    sender_vendor = OUI.get(sender_addr[:6], 'N/A: Unknown vendor')
-    if target_addr == '000000000000':
-        target_vendor = "N/A: MAC is unknown yet"
-    else:
-        target_vendor = OUI.get(target_addr[:6], 'N/A: Unknown vendor')
+        print('\n')
+
+
+def main(args):
+    try: 
+        sniff_socket = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x0003))
+    except socket.error as e: 
+        print (f"Error creating socket: {e}. Maybe try to run as root?") 
+        return
     
-    print("Sender address (base 64):", sender_addr)
-    print("Sender vendor:", sender_vendor)
+    start_sniffing(sniff_socket, args.iface)
 
-    print("Target address (base 64):", target_addr)
-    print("Target vendor:", target_vendor)
 
-    print('\n')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="A simple ARP sniffer")
+    parser.add_argument("-i", dest='iface', help='interface for sniffing', required=True)
+    args = parser.parse_args()
+    main(args)
